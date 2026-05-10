@@ -18,23 +18,28 @@ const PERMISSION_CATALOG = [
   { code: 'permission:create', name: 'Create permissions', description: 'Create new permissions' },
   { code: 'permission:update', name: 'Update permissions', description: 'Edit permissions' },
   { code: 'permission:delete', name: 'Delete permissions', description: 'Delete permissions' },
+  // office
+  { code: 'office:read', name: 'Read offices', description: 'View office list and details' },
+  { code: 'office:create', name: 'Create offices', description: 'Create new offices' },
+  { code: 'office:update', name: 'Update offices', description: 'Edit offices and manage members' },
+  { code: 'office:delete', name: 'Delete offices', description: 'Delete offices' },
 ];
 
 const ROLE_ROWS = [
   { code: 'system_admin', name: 'System Administrator', description: 'Full access to all resources.' },
-  { code: 'user_manager', name: 'User Manager', description: 'Manage users and their roles.' },
-  { code: 'viewer', name: 'Viewer', description: 'Read-only access.' },
+  { code: 'office_manager', name: 'Office Manager', description: 'Manage users and resources within assigned offices.' },
+  { code: 'office_staff', name: 'Office Staff', description: 'Basic access, can only view own profile.' },
 ] as const;
 
 type RoleCode = (typeof ROLE_ROWS)[number]['code'];
 
 const ROLE_GRANTS: Record<RoleCode, string[]> = {
   system_admin: PERMISSION_CATALOG.map((p) => p.code),
-  user_manager: [
+  office_manager: [
     'user:read', 'user:create', 'user:update', 'user:delete',
-    'role:read', 'permission:read',
+    'role:read', 'permission:read', 'office:read',
   ],
-  viewer: ['user:read', 'role:read', 'permission:read'],
+  office_staff: [],
 };
 
 export async function seedIam(db: Db): Promise<void> {
@@ -60,18 +65,19 @@ export async function seedIam(db: Db): Promise<void> {
     if (!role) continue;
 
     const codes = ROLE_GRANTS[r.code];
-    if (!codes.length) continue;
-
-    const permRows = await db
-      .select({ id: permissions.id })
-      .from(permissions)
-      .where(inArray(permissions.code, codes));
-
     await db.delete(rolePermissions).where(eq(rolePermissions.roleId, role.id));
-    if (permRows.length > 0) {
-      await db.insert(rolePermissions).values(
-        permRows.map((p) => ({ roleId: role.id, permissionId: p.id })),
-      );
+
+    if (codes.length > 0) {
+      const permRows = await db
+        .select({ id: permissions.id })
+        .from(permissions)
+        .where(inArray(permissions.code, codes));
+
+      if (permRows.length > 0) {
+        await db.insert(rolePermissions).values(
+          permRows.map((p) => ({ roleId: role.id, permissionId: p.id })),
+        );
+      }
     }
   }
 

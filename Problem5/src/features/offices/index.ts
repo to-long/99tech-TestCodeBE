@@ -1,0 +1,1 @@
+export { officesRoutes } from './routes';

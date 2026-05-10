@@ -1,4 +1,4 @@
-.PHONY: i install up down migrate build run dev seed studio
+.PHONY: i install up down migrate build run dev seed studio test
 
 i: install
 install:
@@ -27,3 +27,6 @@ seed:
 
 studio:
 	bunx drizzle-kit studio
+
+test:
+	bun test

@@ -1,10 +1,10 @@
-import type { MiddlewareHandler } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import type { AuthedContext } from './require-auth';
 
 export function requirePermission(
   ...codes: [string, ...string[]]
-): MiddlewareHandler<AuthedContext> {
-  return async (c, next) => {
+) {
+  return createMiddleware<AuthedContext>(async (c, next) => {
     const perms = c.get('permissions');
     if (!perms) {
       return c.json({ error: 'Missing auth context — call requireAuth first' }, 500);
@@ -17,5 +17,5 @@ export function requirePermission(
       );
     }
     await next();
-  };
+  });
 }

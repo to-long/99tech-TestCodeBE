@@ -17,7 +17,10 @@ export const userCoreSchema = z
   .openapi('User');
 
 export const userDetailSchema = userCoreSchema
-  .extend({ permissions: z.array(z.string()) })
+  .extend({
+    permissions: z.array(z.string()),
+    offices: z.array(z.object({ id: z.string().uuid(), code: z.string(), name: z.string() })),
+  })
   .openapi('UserDetail');
 
 export const userListResponseSchema = z.object({
@@ -34,6 +37,7 @@ export const createUserBody = z
     name: z.string().min(1).max(200),
     status: z.enum(['active', 'inactive', 'locked']).optional(),
     roleCodes: z.array(z.string()).optional(),
+    officeCodes: z.array(z.string()).optional(),
   })
   .openapi('CreateUserBody');
 

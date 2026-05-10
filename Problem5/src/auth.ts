@@ -1,6 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { db } from './db/client';
+import { env } from './env';
 import { accounts, sessions, users, verifications } from './db/schema/iam';
 
 export const auth = betterAuth({
@@ -30,9 +31,9 @@ export const auth = betterAuth({
   },
 
   trustedOrigins: [
-    process.env.FE_URL || 'http://localhost:3030',
-    ...(process.env.NODE_ENV !== 'production'
-      ? [`http://*:${process.env.FE_PORT || '3030'}`]
+    env.FE_URL,
+    ...(env.NODE_ENV !== 'production'
+      ? [`http://*:${env.FE_PORT ?? 3030}`]
       : []),
   ],
 });

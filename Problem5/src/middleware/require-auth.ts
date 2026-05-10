@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { auth } from '../auth';
 import { db } from '../db/client';
-import { permissions, rolePermissions, userRoles, users } from '../db/schema/iam';
+import { permissions, rolePermissions, userOffices, userRoles, users } from '../db/schema/iam';
 
 export type AuthedUser = typeof users.$inferSelect;
 
@@ -11,6 +11,7 @@ export interface AuthedContext {
     user: AuthedUser;
     permissions: Set<string>;
     sessionId: string;
+    officeIds: string[];
   };
 }
 
@@ -29,16 +30,23 @@ export const requireAuth: MiddlewareHandler<AuthedContext> = async (c, next) => 
     return c.json({ error: 'Account inactive' }, 403);
   }
 
-  const rows = await db
-    .select({ code: permissions.code })
-    .from(userRoles)
-    .innerJoin(rolePermissions, eq(rolePermissions.roleId, userRoles.roleId))
-    .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
-    .where(eq(userRoles.userId, user.id));
+  const [permRows, officeRows] = await Promise.all([
+    db
+      .select({ code: permissions.code })
+      .from(userRoles)
+      .innerJoin(rolePermissions, eq(rolePermissions.roleId, userRoles.roleId))
+      .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+      .where(eq(userRoles.userId, user.id)),
+    db
+      .select({ officeId: userOffices.officeId })
+      .from(userOffices)
+      .where(eq(userOffices.userId, user.id)),
+  ]);
 
   c.set('user', user);
-  c.set('permissions', new Set(rows.map((r) => r.code)));
+  c.set('permissions', new Set(permRows.map((r) => r.code)));
   c.set('sessionId', session.session.id);
+  c.set('officeIds', officeRows.map((r) => r.officeId));
 
   void db
     .update(users)

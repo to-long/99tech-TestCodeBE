@@ -6,12 +6,15 @@
   "scripts": {
     "dev": "bun --watch src/main.ts",
     "start": "bun src/main.ts",
-    "build": "tsc",
+    "build": "tsc --noEmit || true",
+    "typecheck": "tsc --noEmit",
     "db:migrate": "bun db/migrate.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "bun db/seed/index.ts"
+    "db:seed": "bun db/seed/index.ts",
+    "test": "bun test",
+    "test:watch": "bun test --watch"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.12",

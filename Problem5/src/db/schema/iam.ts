@@ -128,9 +128,34 @@ export const userRoles = iamSchema.table(
   (t) => [primaryKey({ columns: [t.userId, t.roleId] })],
 );
 
+// ── Offices ─────────────────────────────────────────────────
+export const offices = iamSchema.table('offices', {
+  id: uuid().primaryKey().defaultRandom(),
+  code: text().notNull().unique(),
+  name: text().notNull(),
+  address: text(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userOffices = iamSchema.table(
+  'user_offices',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    officeId: uuid('office_id')
+      .notNull()
+      .references(() => offices.id, { onDelete: 'cascade' }),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.officeId] })],
+);
+
 // ── Relations ───────────────────────────────────────────────
 export const usersRelations = relations(users, ({ many }) => ({
   userRoles: many(userRoles),
+  userOffices: many(userOffices),
   sessions: many(sessions),
   accounts: many(accounts),
 }));
@@ -146,4 +171,13 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
   user: one(users, { fields: [accounts.userId], references: [users.id] }),
+}));
+
+export const officesRelations = relations(offices, ({ many }) => ({
+  userOffices: many(userOffices),
+}));
+
+export const userOfficesRelations = relations(userOffices, ({ one }) => ({
+  user: one(users, { fields: [userOffices.userId], references: [users.id] }),
+  office: one(offices, { fields: [userOffices.officeId], references: [offices.id] }),
 }));

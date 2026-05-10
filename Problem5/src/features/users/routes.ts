@@ -3,6 +3,7 @@ import { type AuthedContext, requireAuth } from '../../middleware/require-auth';
 import { requirePermission } from '../../middleware/require-permission';
 import { validationHook } from '../../middleware/validation-hook';
 import { actorFromContext } from '../../lib/actor';
+import { isUserInOfficeScope } from '../offices/service';
 import {
   createUserBody, errorResponse, listUsersQuery, setRolesBody,
   setRolesResponseSchema, updateUserBody, userCoreSchema, userDetailSchema,
@@ -17,7 +18,7 @@ export const usersRoutes = new OpenAPIHono<AuthedContext>({ defaultHook: validat
 
 usersRoutes.use('/api/users/*', requireAuth);
 
-// ── LIST ─────────────────────────────────────────────────────
+// ── LIST (scoped by office) ──────────────────────────────────
 usersRoutes.openapi(
   createRoute({
     method: 'get', path: '/api/users', tags: ['Users'],
@@ -26,7 +27,12 @@ usersRoutes.openapi(
     middleware: [requirePermission('user:read')],
   }),
   async (c) => {
-    const result = await listUsers(c.req.valid('query'));
+    const query = c.req.valid('query');
+    const officeIds = c.get('officeIds');
+    const result = await listUsers({
+      ...query,
+      scopeOfficeIds: officeIds.length > 0 ? officeIds : undefined,
+    });
     return c.json(result, 200);
   },
 );
@@ -47,7 +53,7 @@ usersRoutes.openapi(
   },
 );
 
-// ── GET /:id ─────────────────────────────────────────────────
+// ── GET /:id (scoped) ───────────────────────────────────────
 usersRoutes.openapi(
   createRoute({
     method: 'get', path: '/api/users/{id}', tags: ['Users'],
@@ -60,6 +66,10 @@ usersRoutes.openapi(
   }),
   async (c) => {
     const { id } = c.req.valid('param');
+    const officeIds = c.get('officeIds');
+    if (!(await isUserInOfficeScope(id, officeIds))) {
+      return c.json({ error: 'User not found' }, 404);
+    }
     const profile = await loadUserProfile(id);
     if (!profile) return c.json({ error: 'User not found' }, 404);
     return c.json(profile, 200);
@@ -92,7 +102,7 @@ usersRoutes.openapi(
   },
 );
 
-// ── UPDATE ───────────────────────────────────────────────────
+// ── UPDATE (scoped) ─────────────────────────────────────────
 usersRoutes.openapi(
   createRoute({
     method: 'patch', path: '/api/users/{id}', tags: ['Users'],
@@ -109,6 +119,10 @@ usersRoutes.openapi(
   }),
   async (c) => {
     const { id } = c.req.valid('param');
+    const officeIds = c.get('officeIds');
+    if (!(await isUserInOfficeScope(id, officeIds))) {
+      return c.json({ error: 'User not found' }, 404);
+    }
     const body = c.req.valid('json');
     const result = await updateUser(id, body, actorFromContext(c));
     if (!result.ok) {
@@ -119,7 +133,7 @@ usersRoutes.openapi(
   },
 );
 
-// ── SOFT DELETE ──────────────────────────────────────────────
+// ── SOFT DELETE (scoped) ────────────────────────────────────
 usersRoutes.openapi(
   createRoute({
     method: 'delete', path: '/api/users/{id}', tags: ['Users'],
@@ -133,6 +147,10 @@ usersRoutes.openapi(
   }),
   async (c) => {
     const { id } = c.req.valid('param');
+    const officeIds = c.get('officeIds');
+    if (!(await isUserInOfficeScope(id, officeIds))) {
+      return c.json({ error: 'User not found' }, 404);
+    }
     const result = await softDeleteUser(id, actorFromContext(c));
     if (!result.ok) {
       if (result.reason === 'self') return c.json({ error: 'Cannot delete yourself' }, 400);
@@ -142,7 +160,7 @@ usersRoutes.openapi(
   },
 );
 
-// ── RESTORE ──────────────────────────────────────────────────
+// ── RESTORE (scoped) ────────────────────────────────────────
 usersRoutes.openapi(
   createRoute({
     method: 'post', path: '/api/users/{id}/restore', tags: ['Users'],
@@ -156,6 +174,10 @@ usersRoutes.openapi(
   }),
   async (c) => {
     const { id } = c.req.valid('param');
+    const officeIds = c.get('officeIds');
+    if (!(await isUserInOfficeScope(id, officeIds))) {
+      return c.json({ error: 'User not found' }, 404);
+    }
     const result = await restoreUser(id, actorFromContext(c));
     if (!result.ok) {
       if (result.reason === 'not-deleted') return c.json({ error: 'User is not deleted' }, 409);
@@ -165,7 +187,7 @@ usersRoutes.openapi(
   },
 );
 
-// ── REPLACE ROLES ────────────────────────────────────────────
+// ── REPLACE ROLES (scoped) ──────────────────────────────────
 usersRoutes.openapi(
   createRoute({
     method: 'put', path: '/api/users/{id}/roles', tags: ['Users'],
@@ -182,6 +204,10 @@ usersRoutes.openapi(
   }),
   async (c) => {
     const { id } = c.req.valid('param');
+    const officeIds = c.get('officeIds');
+    if (!(await isUserInOfficeScope(id, officeIds))) {
+      return c.json({ error: 'User not found' }, 404);
+    }
     const body = c.req.valid('json');
     const result = await setUserRoles(id, body, actorFromContext(c));
     if (!result.ok) {

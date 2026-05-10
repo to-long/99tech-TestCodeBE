@@ -8,6 +8,13 @@
       "when": 1778123946909,
       "tag": "0000_daily_gladiator",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778382939203,
+      "tag": "0001_little_wolfsbane",
+      "breakpoints": true
     }
   ]
 }
