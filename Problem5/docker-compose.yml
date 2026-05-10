@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: problem5-postgres
+    ports:
+      - "5440:5432"
+    environment:
+      POSTGRES_DB: problem5
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
