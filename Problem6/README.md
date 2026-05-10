@@ -386,6 +386,25 @@ If Redis is used, the database remains the source of truth. The cache must be re
 
 ## 11. Security Controls
 
+### 11.0 OWASP Security Risk Review
+
+The implementation must be reviewed against OWASP API Security Top 10 risks before release.
+
+| OWASP API Security Risk | Required Mitigation |
+| --- | --- |
+| API1: Broken Object Level Authorization | Do not allow the client to choose `userId`, score value, or score increment. Derive the user from the access token and the increment from server-side action rules. |
+| API2: Broken Authentication | Require valid access tokens on score update and SSE endpoints. Use short-lived tokens and validate signature, issuer, audience, and expiry. |
+| API3: Broken Object Property Level Authorization | Return only public scoreboard fields. Do not expose email, phone, roles, internal fraud flags, or token data. |
+| API4: Unrestricted Resource Consumption | Apply rate limits, request body limits, SSE connection limits, heartbeat timeouts, and per-instance max subscriber limits. |
+| API5: Broken Function Level Authorization | Only authenticated users may submit score claims. Admin score adjustment APIs, if added later, must be separate and role-protected. |
+| API6: Unrestricted Access to Sensitive Business Flows | Protect the score update flow with one-time action completion proof, anti-replay checks, frequency limits, and anomaly detection. |
+| API7: Server-Side Request Forgery | If action proof validation calls another service, use an allowlist of internal service URLs. Never call arbitrary URLs from request payloads. |
+| API8: Security Misconfiguration | Disable debug errors in production, enforce HTTPS, secure CORS, disable proxy buffering for SSE only, and use secure headers. |
+| API9: Improper Inventory Management | Version the API, document the endpoints, and ensure deprecated score endpoints are removed or blocked. |
+| API10: Unsafe Consumption of APIs | Validate responses from trusted action services, use timeouts, retries with backoff, and authenticated service-to-service calls. |
+
+Release must be blocked if any critical or high-risk issue remains unresolved.
+
 ### 11.1 Required Controls
 
 - Use short-lived access tokens for user authentication.
@@ -397,7 +416,37 @@ If Redis is used, the database remains the source of truth. The cache must be re
 - Enforce rate limits per user ID, IP address, and device/session where available.
 - Log repeated failed attempts and suspicious replay attempts.
 
-### 11.2 Completion Token Recommendation
+### 11.2 Rate Limiting Policy
+
+Rate limiting is required for both score update and SSE endpoints.
+
+Recommended initial limits:
+
+| Endpoint | Limit | Key |
+| --- | --- | --- |
+| `POST /api/scores/actions/complete` | 10 requests per minute | Authenticated user ID |
+| `POST /api/scores/actions/complete` | 30 requests per minute | IP address |
+| `POST /api/scores/actions/complete` invalid proof failures | 5 failures per 10 minutes | User ID + IP address |
+| `GET /api/scoreboard/top` | 120 requests per minute | User ID or IP address |
+| `GET /api/scoreboard/stream` | 3 concurrent SSE connections | User ID |
+| `GET /api/scoreboard/stream` | 20 concurrent SSE connections | IP address |
+
+Rate limit responses must use:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+```
+
+Rate limiter implementation requirements:
+
+- Use a distributed store such as Redis if the API service runs multiple instances.
+- Rate limit before expensive action proof validation.
+- Use stricter limits for invalid completion proofs and replay attempts.
+- Emit rate limit metrics and logs.
+- Do not count successful SSE heartbeat messages as new requests.
+
+### 11.3 Completion Token Recommendation
 
 If using signed completion tokens, include these claims:
 
@@ -416,7 +465,7 @@ If using signed completion tokens, include these claims:
 
 The API service must verify the signature and still check server-side storage to ensure the token has not been consumed.
 
-### 11.3 Abuse Detection
+### 11.4 Abuse Detection
 
 Recommended signals:
 
@@ -426,7 +475,41 @@ Recommended signals:
 - Large score movement inconsistent with action rules.
 - Multiple accounts from the same device or network showing coordinated behavior.
 
-## 12. Reliability and Consistency
+## 12. Idempotency
+
+Idempotency must be implemented for the score update endpoint to protect against client retries, network timeouts, and duplicate submissions.
+
+### 12.1 Idempotency Rules
+
+- `Idempotency-Key` is required for `POST /api/scores/actions/complete`.
+- The idempotency key must be unique per authenticated user and request intent.
+- The server must store the idempotency key, request hash, response body, response status, and expiration time.
+- Repeating the same request with the same idempotency key must return the original response.
+- Reusing the same idempotency key with a different request body must return `409 IDEMPOTENCY_KEY_REUSED`.
+- Idempotency records should expire after 24 hours unless product requirements need a longer retry window.
+
+### 12.2 Replay vs Idempotency
+
+Idempotency and anti-replay solve different problems:
+
+- Idempotency allows a legitimate client to retry the same request safely.
+- Anti-replay prevents the same action completion from awarding score more than once.
+
+Both checks are required. Even without an `Idempotency-Key`, the unique `action_completion_id` constraint must prevent duplicate score awards.
+
+### 12.3 Required Constraints
+
+Recommended database constraints:
+
+```sql
+CREATE UNIQUE INDEX uniq_score_transactions_action_completion
+ON score_transactions (action_completion_id);
+
+CREATE UNIQUE INDEX uniq_idempotency_user_key
+ON idempotency_keys (user_id, idempotency_key);
+```
+
+## 13. Reliability and Consistency
 
 - Score updates must be strongly consistent for each user.
 - Duplicate requests with the same action completion should not award duplicate points.
@@ -434,9 +517,66 @@ Recommended signals:
 - Realtime delivery may be eventually consistent, but clients must be able to recover with the snapshot endpoint.
 - Leaderboard cache failures should not corrupt scores. If cache update fails, the service should retry or rebuild from the database.
 
-## 13. Observability
+## 14. Cloud Deployment and Scalability
 
-### 13.1 Logs
+### 14.1 Cloud Architecture
+
+Recommended production topology:
+
+```text
+Client Browser
+    |
+CDN / WAF
+    |
+Load Balancer
+    |
+API Service Instances
+    |             |
+Database      Redis / Message Broker
+    |             |
+Monitoring / Logging / Alerting
+```
+
+### 14.2 Horizontal Scaling
+
+- API service instances must be stateless for normal HTTP requests.
+- SSE connections are long-lived, so each instance must maintain only its own connected clients.
+- When a score update happens on one instance, publish the leaderboard event to Redis Pub/Sub, Kafka, NATS, or a cloud event bus.
+- Every API instance subscribes to that shared event channel and broadcasts the event to its local SSE clients.
+- Use a distributed rate limiter so limits are enforced consistently across instances.
+- Use managed database read replicas only for read-heavy scoreboard snapshots if consistency requirements allow it. Score writes must go to the primary database.
+
+### 14.3 Load Balancer and Proxy Requirements
+
+- Support long-lived HTTP connections for `/api/scoreboard/stream`.
+- Disable response buffering for the SSE endpoint.
+- Configure idle timeout higher than the heartbeat interval.
+- Prefer HTTP/2 to reduce browser connection pressure.
+- Enable TLS termination at the load balancer or edge.
+- Use health checks that do not depend on the SSE endpoint.
+
+### 14.4 Deployment Safety
+
+- Use rolling deployments so existing SSE clients reconnect gradually.
+- On shutdown, stop accepting new SSE clients, close existing streams gracefully, and let clients reconnect.
+- Keep database migrations backward-compatible across at least one deployment version.
+- Store secrets in a cloud secret manager, not environment files committed to source control.
+- Use infrastructure metrics for CPU, memory, open connections, Redis latency, database locks, and publish latency.
+
+### 14.5 Capacity Planning
+
+Before launch, define expected values for:
+
+- Peak concurrent SSE clients.
+- Peak score update requests per second.
+- Average and p95 leaderboard publish latency.
+- Database write throughput.
+- Redis or message broker fan-out throughput.
+- Maximum acceptable reconnect rate during deploys.
+
+## 15. Observability
+
+### 15.1 Logs
 
 Log the following:
 
@@ -448,7 +588,7 @@ Log the following:
 
 Do not log raw access tokens or raw completion tokens.
 
-### 13.2 Metrics
+### 15.2 Metrics
 
 Recommended metrics:
 
@@ -462,8 +602,11 @@ Recommended metrics:
 - `scoreboard_sse_reconnect_total`
 - `scoreboard_sse_publish_failure_total`
 - `scoreboard_cache_rebuild_total`
+- `idempotency_key_reuse_total`
+- `rate_limit_rejected_total`
+- `action_completion_replay_rejected_total`
 
-### 13.3 Alerts
+### 15.3 Alerts
 
 Recommended alerts:
 
@@ -472,8 +615,10 @@ Recommended alerts:
 - Realtime publish failures.
 - Cache rebuild failures.
 - Unusually high score growth for one user or cohort.
+- SSE connected clients near instance capacity.
+- Redis/message broker publish latency above threshold.
 
-## 14. Suggested Implementation Architecture
+## 16. Suggested Implementation Architecture
 
 ```text
 api-service
@@ -495,7 +640,7 @@ api-service
     └── request-id
 ```
 
-### 14.1 Module Responsibilities
+### 16.1 Module Responsibilities
 
 - `score-action-controller`: Handles HTTP request/response for score updates.
 - `score-service`: Owns the atomic score update transaction.
@@ -504,9 +649,9 @@ api-service
 - `realtime-scoreboard-publisher`: Publishes committed leaderboard snapshots.
 - `scoreboard-controller`: Serves the current top 10 snapshot and stream endpoint.
 
-## 15. Testing Requirements
+## 17. Testing Requirements
 
-### 15.1 Unit Tests
+### 17.1 Unit Tests
 
 - Valid score update increases score once.
 - Reusing the same action completion is rejected.
@@ -514,24 +659,65 @@ api-service
 - Expired completion proof is rejected.
 - Client-provided score increment is ignored or rejected.
 - Tie-breaking produces deterministic rank order.
+- Same `Idempotency-Key` and same request returns the original response.
+- Same `Idempotency-Key` with different request body returns `409`.
+- Rate limiter allows requests under threshold and rejects requests above threshold.
+- SSE event formatter produces valid `id`, `event`, and `data` fields.
 
-### 15.2 Integration Tests
+### 17.2 Integration Tests
 
 - Database transaction rolls back on failure.
 - Concurrent requests for the same action completion award points only once.
 - Top 10 recalculates correctly after score changes.
 - Realtime event is published only after commit.
 - Snapshot endpoint returns the same version as the latest broadcast.
+- Distributed rate limiter works across multiple API instances.
+- Redis Pub/Sub or message broker broadcasts a score update to SSE clients connected to different API instances.
+- Idempotency records are persisted and reused across retries.
+- Database unique constraints prevent duplicate `action_completion_id` transactions.
 
-### 15.3 Security Tests
+### 17.3 End-to-End Tests
+
+- A user completes an action, submits the completion proof, receives an updated score, and all connected scoreboard clients receive the SSE update.
+- Two browser clients connected as different users both receive the same top 10 snapshot after a score change.
+- A disconnected SSE client reconnects and recovers the latest scoreboard snapshot.
+- A client retry after timeout with the same `Idempotency-Key` does not duplicate score.
+- A malicious client attempting to submit another user's action proof is rejected.
+
+### 17.4 Security Tests
 
 - Missing auth token returns `401`.
 - Tampered completion token returns `403`.
 - Replay attack returns `409`.
 - High-frequency invalid requests trigger rate limit.
 - Logs do not contain raw secrets.
+- OWASP API Security Top 10 checklist has no unresolved critical or high-risk findings.
 
-## 16. Open Questions for Engineering
+### 17.5 Performance Tests
+
+Performance tests are required before production release.
+
+Minimum scenarios:
+
+- `GET /api/scoreboard/top` under normal and peak read traffic.
+- `POST /api/scores/actions/complete` under normal and peak write traffic.
+- Concurrent score updates for different users.
+- Concurrent duplicate score updates for the same action completion.
+- SSE fan-out to expected peak connected clients.
+- SSE reconnect storm after rolling deploy or temporary network interruption.
+- Redis/message broker latency under publish bursts.
+
+Recommended initial targets, to be confirmed by product traffic estimates:
+
+| Scenario | Target |
+| --- | --- |
+| Score update p95 latency | Less than 300 ms excluding external action service latency |
+| Scoreboard snapshot p95 latency | Less than 100 ms when served from cache |
+| SSE publish p95 latency | Less than 500 ms from database commit to client receive |
+| Duplicate action submissions | 0 duplicate score awards |
+| SSE reconnect success | 99% reconnect within 10 seconds |
+
+## 18. Open Questions for Engineering
 
 - Is the action completion generated by the same API service or by another trusted backend service?
 - What SSE fan-out mechanism should be used when the API service runs multiple instances: Redis Pub/Sub, message broker, or platform-managed event bus?
@@ -539,8 +725,10 @@ api-service
 - Should anonymous users be allowed to view the scoreboard?
 - Are display names immutable for leaderboard snapshots, or should historical names be updated when users rename themselves?
 - What score increments apply to each action type?
+- What are the expected peak concurrent SSE clients and target cloud region count?
+- What WAF and API gateway are available in the deployment platform?
 
-## 17. Additional Improvement Comments
+## 19. Additional Improvement Comments
 
 - Prefer a backend-to-backend action completion event over a client-submitted completion token when possible. It reduces the attack surface because the browser never handles score-granting proof.
 - Use an outbox pattern if losing a realtime event after a successful database commit is unacceptable. The snapshot endpoint already provides recovery, but outbox processing improves delivery reliability.
