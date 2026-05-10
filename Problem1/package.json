@@ -1,0 +1,10 @@
+{
+  "name": "problem-1-sum-to-n",
+  "version": "1.0.0",
+  "description": "Three JavaScript implementations for summing integers from 1 to n.",
+  "main": "solution.js",
+  "scripts": {
+    "start": "node solution.js"
+  },
+  "license": "MIT"
+}
